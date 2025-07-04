@@ -15,7 +15,10 @@
 package proxy
 
 import (
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -28,4 +31,86 @@ func TestInflightRequest(t *testing.T) {
 	inflightChecker.removeRequest(artName)
 	_, exist := inflightChecker.reqMap[artName]
 	assert.False(t, exist)
+}
+
+func TestSingleflightBlobDeduplication(t *testing.T) {
+	callCount := 0
+	artifactKey := "test-repo:test-blob"
+	
+	var wg sync.WaitGroup
+	const numGoroutines = 5
+	results := make(chan string, numGoroutines)
+	
+	// Start multiple goroutines concurrently calling the same key
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			
+			result, _, _ := blobGroup.Do(artifactKey, func() (interface{}, error) {
+				callCount++
+				time.Sleep(10 * time.Millisecond) // Simulate work
+				return fmt.Sprintf("result-%d", callCount), nil
+			})
+			
+			results <- result.(string)
+		}(i)
+	}
+	
+	wg.Wait()
+	close(results)
+	
+	// Verify all goroutines got the same result
+	firstResult := ""
+	for result := range results {
+		if firstResult == "" {
+			firstResult = result
+		} else {
+			assert.Equal(t, firstResult, result)
+		}
+	}
+	
+	// Only one execution should have occurred
+	assert.Equal(t, 1, callCount)
+}
+
+func TestSingleflightManifestDeduplication(t *testing.T) {
+	callCount := 0
+	artifactKey := "test-repo:test-manifest"
+	
+	var wg sync.WaitGroup
+	const numGoroutines = 3
+	results := make(chan string, numGoroutines)
+	
+	// Start multiple goroutines concurrently calling the same key
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			
+			result, _, _ := manifestGroup.Do(artifactKey, func() (interface{}, error) {
+				callCount++
+				time.Sleep(10 * time.Millisecond) // Simulate work
+				return fmt.Sprintf("manifest-%d", callCount), nil
+			})
+			
+			results <- result.(string)
+		}(i)
+	}
+	
+	wg.Wait()
+	close(results)
+	
+	// Verify all goroutines got the same result
+	firstResult := ""
+	for result := range results {
+		if firstResult == "" {
+			firstResult = result
+		} else {
+			assert.Equal(t, firstResult, result)
+		}
+	}
+	
+	// Only one execution should have occurred
+	assert.Equal(t, 1, callCount)
 }

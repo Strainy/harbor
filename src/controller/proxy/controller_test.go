@@ -17,7 +17,9 @@ package proxy
 import (
 	"context"
 	"io"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/docker/distribution"
 	"github.com/opencontainers/go-digest"
@@ -227,3 +229,57 @@ func TestGetRef(t *testing.T) {
 		})
 	}
 }
+
+// TestSingleflightIntegration tests that singleflight works correctly in isolation
+func TestSingleflightIntegration(t *testing.T) {
+	callCount := 0
+	artifactKey := "integration-test:artifact"
+
+	var wg sync.WaitGroup
+	const numGoroutines = 5
+	results := make(chan int, numGoroutines)
+
+	// Simulate concurrent requests using singleflight
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			result, _, _ := blobGroup.Do(artifactKey, func() (interface{}, error) {
+				callCount++
+				currentCall := callCount
+				time.Sleep(10 * time.Millisecond) // Simulate work
+				return currentCall, nil
+			})
+
+			results <- result.(int)
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	// Verify all goroutines got the same result (from the first call)
+	var allResults []int
+	for result := range results {
+		allResults = append(allResults, result)
+	}
+	
+	if len(allResults) != numGoroutines {
+		t.Errorf("Expected %d results, got %d", numGoroutines, len(allResults))
+	}
+	
+	expectedResult := allResults[0]
+	for i, result := range allResults {
+		if result != expectedResult {
+			t.Errorf("Result %d: expected %d, got %d", i, expectedResult, result)
+		}
+	}
+
+	// Only one execution should have occurred
+	if callCount != 1 {
+		t.Errorf("Expected exactly 1 call, got %d", callCount)
+	}
+}
+
+

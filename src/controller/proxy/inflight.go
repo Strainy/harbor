@@ -14,16 +14,29 @@
 
 package proxy
 
-import "sync"
+import (
+	"sync"
+
+	"golang.org/x/sync/singleflight"
+)
 
 type inflightRequest struct {
 	mu     sync.Mutex
 	reqMap map[string]any
 }
 
-var inflightChecker = &inflightRequest{
-	reqMap: make(map[string]any),
-}
+var (
+	// inflightChecker is the original inflight checker used for local pushes
+	inflightChecker = &inflightRequest{
+		reqMap: make(map[string]any),
+	}
+
+	// blobGroup handles singleflight for blob requests
+	blobGroup singleflight.Group
+
+	// manifestGroup handles singleflight for manifest requests
+	manifestGroup singleflight.Group
+)
 
 // addRequest if the artifact already exist in the inflightRequest, return false
 // else return true
